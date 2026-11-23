@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from mcp_agent.executor.executor import AsyncioExecutor
 from mcp_agent.workflows.parallel.fan_out import FanOut
 from mcp_agent.workflows.llm.augmented_llm import RequestParams
 
@@ -409,6 +410,27 @@ class TestFanOut:
 
         # Verify method calls
         mock_context.executor.execute_many.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_generate_str_awaits_async_functions(self, mock_context):
+        """
+        Tests that generate_str awaits async functions instead of stringifying the coroutine.
+        """
+
+        async def async_worker(message):
+            return f"async: {message}"
+
+        def sync_worker(message):
+            return f"sync: {message}"
+
+        mock_context.executor = AsyncioExecutor()
+        mock_context.tracer = None
+        mock_context.tracing_enabled = False
+        fan_out = FanOut(functions=[async_worker, sync_worker], context=mock_context)
+
+        result = await fan_out.generate_str("hello")
+
+        assert result == {"async_worker": "async: hello", "sync_worker": "sync: hello"}
 
     @pytest.mark.asyncio
     async def test_generate_structured_with_llms(

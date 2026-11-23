@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import functools
 from opentelemetry import trace
@@ -135,6 +136,9 @@ class FanOut(ContextDependent):
             def fn_result_to_string(fn, message):
                 return str(fn(message))
 
+            async def async_fn_result_to_string(fn, message):
+                return str(await fn(message))
+
             tasks: List[Callable[..., str] | Coroutine[Any, Any, str]] = []
             task_names: List[str] = []
             task_results = []
@@ -158,9 +162,12 @@ class FanOut(ContextDependent):
 
                 # Create bound methods for regular functions
                 for function in self.functions:
-                    tasks.append(
-                        functools.partial(fn_result_to_string, function, message)
+                    to_string = (
+                        async_fn_result_to_string
+                        if asyncio.iscoroutinefunction(function)
+                        else fn_result_to_string
                     )
+                    tasks.append(functools.partial(to_string, function, message))
                     task_names.append(function.__name__ or id(function))
 
                 span.set_attribute("task_names", task_names)
