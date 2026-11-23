@@ -304,6 +304,15 @@ class Workflow(ABC, Generic[T], ContextDependent):
                     if cancel_task in done:
                         # Cancel signal received, cancel the run task
                         run_task.cancel()
+                        # Let run() finish its own cancellation cleanup first
+                        (run_outcome,) = await asyncio.gather(
+                            run_task, return_exceptions=True
+                        )
+                        if isinstance(run_outcome, Exception):
+                            self._logger.error(
+                                "Error while cancelling workflow run",
+                                exception=repr(run_outcome),
+                            )
                         self.update_status("cancelled")
                         raise CancelledError("Workflow was cancelled")
                     elif run_task in done:

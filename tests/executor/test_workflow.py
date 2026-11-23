@@ -1,4 +1,6 @@
 import asyncio
+from concurrent.futures import CancelledError
+
 import pytest
 from mcp_agent.executor.workflow import WorkflowState, WorkflowResult, Workflow
 from unittest.mock import MagicMock, AsyncMock
@@ -143,6 +145,46 @@ class TestWorkflowAsyncMethods:
         # wait for completion
         await workflow._run_task
         assert workflow.state.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_cancel_waits_for_run_finally_before_cleanup(self, mock_context):
+        order = []
+        finalizing = asyncio.Event()
+        release = asyncio.Event()
+        cancel_signal = asyncio.Event()
+
+        class SlowCleanupWorkflow(Workflow):
+            async def run(self, *args, **kwargs):
+                try:
+                    await asyncio.Future()
+                finally:
+                    finalizing.set()
+                    await release.wait()
+                    order.append("run-finally")
+
+            async def cleanup(self):
+                order.append("workflow-cleanup")
+
+        async def wait_for_cancel(*args, **kwargs):
+            await cancel_signal.wait()
+
+        mock_context.executor.uuid.return_value = "uuid-123"
+        mock_context.executor.wait_for_signal = AsyncMock(side_effect=wait_for_cancel)
+        mock_context.workflow_registry.register = AsyncMock()
+        wf = SlowCleanupWorkflow(name="SlowCleanup", context=mock_context)
+
+        await wf.run_async()
+        cancel_signal.set()
+        await asyncio.wait_for(finalizing.wait(), timeout=5)
+
+        assert wf.state.status == "cancelling"
+        assert order == []
+
+        release.set()
+        with pytest.raises(CancelledError):
+            await asyncio.wait_for(wf._run_task, timeout=5)
+        assert order == ["run-finally", "workflow-cleanup"]
+        assert wf.state.status == "cancelled"
 
     @pytest.mark.asyncio
     async def test_parallel_workflows_unique_ids(self, mock_context):
